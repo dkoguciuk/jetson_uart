@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include <cstdlib>
 #include <termios.h>
 #include <unistd.h>
@@ -25,10 +26,10 @@ int main (int argc, char **argv)
     tcsetattr( STDIN_FILENO, TCSANOW, &newt);
 
     // Open serial port
-    serial_descriptor = open("/dev/ttyS0", O_RDWR | O_NOCTTY | O_NDELAY);
+    serial_descriptor = open("/dev/ttyTHS1", O_RDWR | O_NDELAY | O_NONBLOCK);
     if (serial_descriptor == -1)
     {
-        printf("Could not open serial port on /dev/ttyS0!\n");
+        printf("Could not open serial port on /dev/ttyTHS1!\n");
         clean_and_exit(-1);
     }
     else fcntl(serial_descriptor, F_SETFL, 0);
@@ -47,26 +48,31 @@ int main (int argc, char **argv)
     // UART settings
     struct termios termAttr;
     tcgetattr(serial_descriptor,&termAttr);
+    cfsetispeed(&termAttr,B9600);                       // Input speed
+    cfsetospeed(&termAttr,B9600);                       // Output speed
     termAttr.c_iflag = 0;                               // Turn off input processing
     termAttr.c_oflag = 0;                               // Turn of output processing
     termAttr.c_lflag = 0;                               // Turn off line procesinng
     termAttr.c_cflag = 0;                               // Turn off character processing
-    termAttr.c_cflag |= CREAD | CS8;                    // Read 8 bit
-    cfsetispeed(&termAttr,B9600);                       // Input speed
-    cfsetospeed(&termAttr,B9600);                       // Output speed
-    tcsetattr(serial_descriptor,TCSAFLUSH,&termAttr);   // Save settings
+    termAttr.c_cflag |= (CS8|CREAD|CLOCAL);             // Read 8 bit
+    termAttr.c_cc[VMIN] = 0;                            // No minimal chars
+    termAttr.c_cc[VTIME] = 1;                           // Wait 0.1 s for input
+    tcsetattr(serial_descriptor,TCSANOW,&termAttr);   // Save settings
+
+    /* Flush anything already in the serial buffer */
+     tcflush(serial_descriptor, TCIFLUSH);
+     tcflush(STDIN_FILENO, TCIFLUSH);
 
     //Kill signal handler
     signal(SIGINT,quit_signal_handler);
 
     // loop
-    while ((c=getchar())!= 'q')
+    while ((c=getchar()) != 'q')
     {
         if (c=='0')
         {
             printf("Writing command 0...\n\r");
             write(serial_descriptor, "0", sizeof(char));
-
         } else if (c=='1')
         {
             printf("Writing command 1...\n\r");
@@ -75,7 +81,8 @@ int main (int argc, char **argv)
         {
             printf("Writing command q...\n\r");
             write(serial_descriptor, "q", sizeof(char));
-        } else printf("Press 1 or 0 or q.\n\r");
+        } else if (c>0)
+            printf("Press 1 or 0 or q.\n\r");
     }
 
     // cleanup
@@ -103,15 +110,14 @@ void quit_signal_handler(int signum)
 
 void uart_signal_handler(int signum)
 {
-    int n;
     char buffer[1024];
-    if ((n = read(serial_descriptor, &buffer, sizeof(buffer)))>0)
-        if (n>0)
+    memset(buffer, '\0', 1024);
+    if ((read(serial_descriptor, &buffer, sizeof(buffer)))>0)
+    {
+        if (buffer[0] == 'q')
         {
-            if (buffer[0] == 'q')
-            {
-                printf("Will end now!\n");
-                clean_and_exit(0);
-            } else printf("Got command = %c\n", buffer[0]);
-        }
+            printf("Will end now!\n");
+            clean_and_exit(0);
+        } else printf("Got command = %c\n", buffer[0]);
+    }
 }
